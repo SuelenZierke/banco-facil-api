@@ -1,0 +1,345 @@
+name: Pipeline de Seguranca DevSecOps
+
+# Dispara a pipeline em pushes e pull requests para a branch principal.
+# É exatamente aqui que o "Shift Left" acontece: os controles de seguranca
+# rodam ANTES do merge/deploy, nao depois que o problema chega em producao.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  packages: write   # necessario para publicar a imagem no GHCR
+
+jobs:
+
+  # -----------------------------------------------------------------------
+  # JOB 1 - DETECCAO DE SEGREDOS (Secret Sprawl)
+  # Varre todo o historico/arquivos do repositorio em busca de credenciais
+  # expostas (chaves de API, senhas, tokens). Deve ser o PRIMEIRO gate da
+  # pipeline: nao faz sentido testar ou buildar codigo que ja vaza segredo.
+  # -----------------------------------------------------------------------
+  secret-scan:
+    name: Deteccao de Segredos (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # historico completo, para o Gitleaks varrer todos os commits
+
+      - name: Instalar Gitleaks
+        run: |
+          curl -sSL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar xzf gitleaks.tar.gz gitleaks
+          sudo install -m 755 gitleaks /usr/local/bin/gitleaks
+
+      - name: Executar Gitleaks
+        run: gitleaks detect --source . -v
+        # Escaneia TODO o historico de commits do repositorio (nao apenas o
+        # diff do push atual). Se algum segredo for encontrado, o gitleaks
+        # retorna codigo de saida 1 e este step falha, bloqueando a pipeline.
+        #
+        # Usamos o binario direto em vez de "gitleaks/gitleaks-action@v2"
+        # porque essa Action calcula o intervalo de commits a escanear a
+        # partir do evento de push (baseRef^..headRef); quando o primeiro
+        # commit de um push multi-commit e a RAIZ do repositorio (sem pai),
+        # esse calculo gera um "git log" invalido e a Action acaba escaneando
+        # zero commits, passando silenciosamente mesmo com segredo exposto.
+
+  # -----------------------------------------------------------------------
+  # JOB 2 - TESTES UNITARIOS + QUALITY GATE
+  # Compila o projeto e roda os testes automatizados. Um teste falho aqui
+  # bloqueia o restante da pipeline: nenhum artefato quebrado deve avancar.
+  # -----------------------------------------------------------------------
+  unit-tests:
+    name: Testes Unitarios (Maven)
+    needs: secret-scan   # so roda se o job de deteccao de segredos passar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Rodar testes unitarios
+        run: mvn --batch-mode test
+
+      - name: Publicar relatorio de testes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-testes
+          path: target/surefire-reports/
+
+  # -----------------------------------------------------------------------
+  # JOB 3 - SAST (Static Application Security Testing)
+  # Analisa o CODIGO-FONTE em busca de padroes inseguros (injecao, uso de
+  # criptografia fraca, tratamento de erro inadequado etc.), sem executar
+  # a aplicacao. Aqui usamos o Semgrep (gratuito, sem necessidade de conta).
+  # -----------------------------------------------------------------------
+  sast:
+    name: Analise Estatica de Codigo (Semgrep)
+    needs: unit-tests   # so roda se os testes unitarios passarem
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar Semgrep
+        run: pip install semgrep
+
+      - name: Executar Semgrep (regras de seguranca + Java)
+        run: semgrep --config p/ci --config p/java --config p/secrets --error --exclude=".github/workflows/*" .
+        # --error faz o Semgrep retornar codigo de saida != 0 quando encontra
+        # findings, o que quebra o job e bloqueia a pipeline (Quality Gate).
+
+  # -----------------------------------------------------------------------
+  # JOB 4 - SCA (Software Composition Analysis)
+  # Verifica as DEPENDENCIAS do projeto (pom.xml) contra bancos de dados
+  # publicos de vulnerabilidades (NVD/OSV). E aqui que a versao vulneravel
+  # do log4j-core (Log4Shell - CVE-2021-44228) sera detectada.
+  # -----------------------------------------------------------------------
+  sca:
+    name: Analise de Dependencias (Trivy)
+    needs: sast   # so roda se o SAST passar (Quality Gate)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Escanear dependencias do projeto
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'vuln'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'   # falha o job se achar vulnerabilidade CRITICAL/HIGH
+          format: 'table'
+
+  # -----------------------------------------------------------------------
+  # JOB 5 - HARDENING DE CONTAINER (Linter de Dockerfile)
+  # Avalia o Dockerfile contra boas praticas (imagem "latest" nao fixada,
+  # container rodando como root, uso de ADD em vez de COPY, camadas
+  # desnecessarias etc.) ANTES de a imagem ser construida.
+  # -----------------------------------------------------------------------
+  dockerfile-lint:
+    name: Lint do Dockerfile (Hadolint)
+    needs: sca   # so roda se o SCA passar (Quality Gate)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Executar Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+          # Deve falhar por causa de:
+          #  - DL3007: uso da tag "latest" (imagem nao fixada)
+          #  - DL3002: ultimo USER definido como "root"
+
+  # -----------------------------------------------------------------------
+  # JOB 6 - BUILD & PUSH DA IMAGEM (GHCR)
+  # So executa se TODOS os gates anteriores passarem (needs). Isso e o
+  # coracao do "Shift Left": a imagem so e publicada quando o codigo,
+  # as dependencias, o Dockerfile e os segredos estao em conformidade.
+  # -----------------------------------------------------------------------
+  build-and-push:
+    name: Build e Push da Imagem (GHCR)
+    runs-on: ubuntu-latest
+    needs: [ secret-scan, unit-tests, sast, sca, dockerfile-lint ]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:   # consumidos pelo job "generate-readme"
+      image: ${{ steps.image.outputs.name }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Empacotar aplicacao (gera o .jar)
+        run: mvn --batch-mode -DskipTests package
+
+      - name: Normalizar nome da imagem (minusculo, exigido pelo GHCR)
+        id: image
+        run: |
+          IMAGE_NAME="$(echo ghcr.io/${{ github.repository }} | tr '[:upper:]' '[:lower:]')"
+          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+          echo "name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Login no GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build e push da imagem Docker
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  # -----------------------------------------------------------------------
+  # JOB 7 - RESUMO DA PIPELINE (Job Summary)
+  # Roda sempre, mesmo se algum gate anterior falhar ou for pulado
+  # (if: always()), e publica uma tabela consolidada na aba Actions >
+  # Summary, dando uma visao geral de quais controles de seguranca
+  # passaram, falharam ou nem chegaram a rodar.
+  # -----------------------------------------------------------------------
+  security-summary:
+    name: Resumo da Pipeline de Seguranca
+    runs-on: ubuntu-latest
+    needs: [ secret-scan, unit-tests, sast, sca, dockerfile-lint ]
+    if: always()
+    steps:
+      - name: Publicar resumo consolidado
+        run: |
+          # O Job Summary do GitHub Actions renderiza Markdown/GFM, mas
+          # ignora "style=color:..."; a forma padrao de dar destaque visual
+          # (cor + icone) e usando emoji unicode, que o GFM exibe nativamente.
+          format_status() {
+            case "$1" in
+              success)   echo "🟢 Sucesso" ;;
+              failure)   echo "🔴 Falha" ;;
+              skipped)   echo "⚪ Pulado" ;;
+              cancelled) echo "🟠 Cancelado" ;;
+              *)         echo "$1" ;;
+            esac
+          }
+
+          SECRET_SCAN="$(format_status '${{ needs.secret-scan.result }}')"
+          UNIT_TESTS="$(format_status '${{ needs.unit-tests.result }}')"
+          SAST_RESULT="$(format_status '${{ needs.sast.result }}')"
+          SCA_RESULT="$(format_status '${{ needs.sca.result }}')"
+          DOCKERFILE_LINT="$(format_status '${{ needs.dockerfile-lint.result }}')"
+
+          {
+            echo "## Resumo da Pipeline de Seguranca"
+            echo ""
+            echo "| Gate | Resultado |"
+            echo "|---|---|"
+            echo "| Deteccao de Segredos (Gitleaks) | $SECRET_SCAN |"
+            echo "| Testes Unitarios (Maven) | $UNIT_TESTS |"
+            echo "| SAST (Semgrep) | $SAST_RESULT |"
+            echo "| SCA (Trivy) | $SCA_RESULT |"
+            echo "| Lint do Dockerfile (Hadolint) | $DOCKERFILE_LINT |"
+            echo ""
+            if [ "${{ needs.secret-scan.result }}" = "failure" ] || \
+               [ "${{ needs.unit-tests.result }}" = "failure" ] || \
+               [ "${{ needs.sast.result }}" = "failure" ] || \
+               [ "${{ needs.sca.result }}" = "failure" ] || \
+               [ "${{ needs.dockerfile-lint.result }}" = "failure" ]; then
+              echo "### 🔴 Resultado geral: BLOQUEADO"
+              echo "Pelo menos um gate de seguranca falhou — a imagem NAO foi publicada no GHCR."
+            else
+              echo "### 🟢 Resultado geral: LIBERADO"
+              echo "Todos os gates de seguranca passaram."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -----------------------------------------------------------------------
+  # JOB 8 - GERACAO DO README.md
+  # Ultimo job da pipeline. Gera o README.md com o nome dos alunos (lidos de
+  # alunos.txt) e o resultado do build da imagem Docker (status, imagem,
+  # tags e digest) e faz o commit na branch main.
+  #
+  # - if: always() -> roda mesmo que o build tenha falhado ou sido pulado
+  #   (algum gate barrou), registrando esse resultado no README.
+  # - So roda em push na main: em pull request nao se deve commitar nada.
+  # - O commit feito com o GITHUB_TOKEN NAO dispara uma nova execucao da
+  #   pipeline (o GitHub bloqueia isso de proposito, evitando loop infinito);
+  #   o "[skip ci]" na mensagem e apenas uma garantia extra.
+  # - O README.md e sobrescrito a cada execucao: edicoes manuais se perdem.
+  # -----------------------------------------------------------------------
+  generate-readme:
+    name: Geracao do README.md
+    runs-on: ubuntu-latest
+    needs: [ build-and-push, security-summary ]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write   # necessario para commitar o README.md na main
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Gerar README.md
+        env:
+          BUILD_RESULT: ${{ needs.build-and-push.result }}
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          DIGEST: ${{ needs.build-and-push.outputs.digest }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          case "$BUILD_RESULT" in
+            success)   STATUS="🟢 Sucesso" ;;
+            failure)   STATUS="🔴 Falha" ;;
+            skipped)   STATUS="⚪ Pulado (algum gate de seguranca falhou)" ;;
+            cancelled) STATUS="🟠 Cancelado" ;;
+            *)         STATUS="$BUILD_RESULT" ;;
+          esac
+
+          {
+            echo "# Banco Facil API - Pipeline DevSecOps"
+            echo ""
+            echo "Projeto da disciplina de Seguranca da Informacao (Unifebe)."
+            echo "Este arquivo e gerado automaticamente pela pipeline."
+            echo ""
+            echo "## Alunos"
+            echo ""
+            # Remove CR (arquivos com final de linha do Windows), espacos nas
+            # pontas e linhas vazias; cada nome vira um item de lista.
+            if [ -f alunos.txt ]; then
+              awk '{ gsub(/\r/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") } length { print "- " $0 }' alunos.txt
+            else
+              echo "_alunos.txt nao encontrado._"
+            fi
+            echo ""
+            echo "## Resultado do Docker Build"
+            echo ""
+            echo "| Item | Valor |"
+            echo "|---|---|"
+            echo "| Status | $STATUS |"
+            if [ "$BUILD_RESULT" = "success" ]; then
+              echo "| Imagem | \`$IMAGE\` |"
+              echo "| Tags | \`latest\`, \`$COMMIT_SHA\` |"
+              echo "| Digest | \`${DIGEST:-indisponivel}\` |"
+            fi
+            echo "| Commit | \`$COMMIT_SHA\` |"
+            echo "| Execucao | [$GITHUB_RUN_ID]($RUN_URL) |"
+            echo "| Data | $(date -u '+%d/%m/%Y %H:%M') UTC |"
+          } > README.md
+
+          cat README.md
+
+      - name: Commitar README.md
+        run: |
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "README.md sem alteracoes; nada a commitar."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: atualiza README.md [skip ci]"
+          git push origin HEAD:main
