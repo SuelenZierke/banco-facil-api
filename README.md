@@ -15,8 +15,8 @@ Este arquivo e gerado automaticamente pela pipeline.
 |---|---|
 | Status | 🟢 Sucesso |
 | Imagem | `ghcr.io/suelenzierke/banco-facil-api` |
-| Tags | `latest`, `71fe2152b7d3d97597f8433a61a2947b0bb4bf07` |
-| Digest | `sha256:f577ced9a30abb3e9ec14b8fc0a6ab6015bb6f53a22ea4c58489b05d2a49421c` |
-| Commit | `71fe2152b7d3d97597f8433a61a2947b0bb4bf07` |
-| Execucao | [36136598421](https://github.com/SuelenZierke/banco-facil-api/actions/runs/36136598421) |
-| Data | 25/09/2026 12:46 UTC |
+| Tags | `latest`, `bfd8a6b8ca184e0a964fb6f1fbd07f5589847f28` |
+| Digest | `sha256:de86a319e0b6d74cb5802bd505134f22aaa6580de6cfdbce0d63ba188d3fd38d` |
+| Commit | `bfd8a6b8ca184e0a964fb6f1fbd07f5589847f28` |
+| Execucao | [36137389292](https://github.com/SuelenZierke/banco-facil-api/actions/runs/36137389292) |
+| Data | 25/09/2026 12:53 UTC |
