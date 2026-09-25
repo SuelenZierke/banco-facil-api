@@ -4,10 +4,20 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <!--
+        CORRECAO (SCA): spring-boot-starter-parent atualizado de 3.2.5 para 3.5.16.
+        A versao 3.2.5 continha CVEs CRITICAL/HIGH em Tomcat, Spring Framework e
+        outras dependencias transitivas. A versao 3.5.16 e a ultima patch da linha
+        3.5.x e incorpora as atualizacoes de seguranca ate setembro de 2026.
+
+        Nota: Spring Boot 3.5.x chegou ao EOL em junho/2026. Para ambientes de
+        producao reais, a migracao para Spring Boot 4.x seria o proximo passo.
+        Para este exercicio didatico, 3.5.16 elimina as CVEs exigidas pela atividade.
+    -->
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.2.5</version>
+        <version>3.5.16</version>
         <relativePath/>
     </parent>
 
@@ -15,10 +25,19 @@
     <artifactId>banco-facil-api</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>banco-facil-api</name>
-    <description>Aplicacao de demonstracao (propositalmente vulneravel) para atividade de Shift Left / Shift Right</description>
+    <description>Aplicacao de demonstracao para atividade de Shift Left / Shift Right — vulnerabilidades corrigidas</description>
 
     <properties>
         <java.version>17</java.version>
+        <!--
+            CORRECAO (SCA): sobrescrita explicita da versao do log4j-core.
+            A dependencia declarada abaixo fixa a versao em 2.25.5 (mais recente
+            disponivel em setembro/2026, livre de CVEs conhecidas).
+            O spring-boot-starter-parent 3.5.x gerencia log4j2 via log4j2.version;
+            sobrescrever essa propriedade garante que todas as dependencias transitivas
+            do log4j2 tambem sejam atualizadas de forma consistente.
+        -->
+        <log4j2.version>2.25.5</log4j2.version>
     </properties>
 
     <dependencies>
@@ -27,25 +46,29 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
-        <!-- FALHA PROPOSITAL (SCA): versao vulneravel a Log4Shell (CVE-2021-44228 / CVE-2021-45046) -->
+        <!--
+            CORRECAO (SCA): log4j-core atualizado para 2.25.5 (via propriedade
+            log4j2.version acima). A versao original 2.14.1 era vulneravel ao
+            Log4Shell (CVE-2021-44228, CRITICAL) e CVE-2021-45046 (CRITICAL).
+            Versoes corrigidas: >= 2.17.1 (CVE-2021-44228 + CVE-2021-45046 + CVE-2021-45105).
+            A versao 2.25.5 e a mais recente da linha 2.x (release: 2026-07-01).
+            Referencia: https://logging.apache.org/log4j/2.x/release-notes.html
+        -->
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-core</artifactId>
-            <version>2.14.1</version>
+            <!-- versao controlada pela propriedade log4j2.version -->
         </dependency>
 
-        <!-- FALHA PROPOSITAL: dependencia adicionada mas nunca utilizada no codigo -->
-        <dependency>
-            <groupId>com.google.code.gson</groupId>
-            <artifactId>gson</artifactId>
-            <version>2.10.1</version>
-        </dependency>
-             
-        <dependency>
-            <groupId>com.google.code.gson</groupId>
-            <artifactId>gson</artifactId>
-            <version>2.10.1</version>
-        </dependency>
+        <!--
+            CORRECAO (SCA / dependencia nao utilizada): as duas declaracoes de
+            com.google.code.gson:gson foram removidas.
+            Motivo 1: a dependencia era declarada duas vezes (duplicata).
+            Motivo 2: nenhum import de com.google.gson.* existe no codigo-fonte
+                      (verificado com grep -r "import com.google.gson" src/).
+            Manter dependencias nao utilizadas aumenta a superficie de ataque
+            (mais bibliotecas = mais CVEs potenciais) sem nenhum beneficio.
+        -->
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
