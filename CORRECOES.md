@@ -1,4 +1,4 @@
-# Registro de Correções — banco-facil-api
+﻿# Registro de Correções — banco-facil-api
 
 **Disciplina:** Segurança da Informação — DevSecOps (Unifebe)  
 **Atividade:** Shift Left / Shift Right em Pipelines de CI/CD  
@@ -30,10 +30,10 @@ O arquivo `AppConfig.java` continha quatro credenciais hardcoded como constantes
 
 ```java
 // ANTES (vulnerável)
-public static final String DB_PASSWORD           = "SuperSecretP@ssw0rd123";
-public static final String AWS_ACCESS_KEY_ID     = "AKIAIOSFODNN7EXAMPLE";
-public static final String AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-public static final String PAYMENT_GATEWAY_API_KEY = "sk_live_51H8xJ2EXAMPLEKEYDONOTUSEINPRODUCTION0001";
+public static final String DB_PASSWORD             = "<senha-banco-exemplo>";
+public static final String AWS_ACCESS_KEY_ID       = "<chave-aws-exemplo>";
+public static final String AWS_SECRET_ACCESS_KEY   = "<segredo-aws-exemplo>";
+public static final String PAYMENT_GATEWAY_API_KEY = "<chave-stripe-exemplo>";
 ```
 
 O Gitleaks varrendo o histórico completo do repositório detectava a chave AWS (`aws-access-token`) e a chave Stripe (`stripe-access-token`), falhando com código de saída 1 e bloqueando toda a pipeline.
