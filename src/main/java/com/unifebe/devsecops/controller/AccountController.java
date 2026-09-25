@@ -10,7 +10,6 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 
 @RestController
 public class AccountController {
@@ -29,13 +28,16 @@ public class AccountController {
     @GetMapping("/conta")
     public String buscarConta(@RequestParam String id) throws SQLException {
         Connection conn = DriverManager.getConnection("jdbc:h2:mem:test");
-        Statement stmt = conn.createStatement();
 
-        //FALHA (SQL Injection): o parametro "id" vem direto da requisicao HTTP
-        //e e concatenado na string SQL sem nenhuma sanitizacao/parametrizacao.
-        //Um atacante pode enviar, por exemplo, "1' OR '1'='1" para ler contas
-        //que nao deveria, ou "1'; DROP TABLE contas; --" para destruir dados.
-        ResultSet rs = stmt.executeQuery("SELECT * FROM contas WHERE id = '" + id + "'");
+        // CORRECAO (SQL Injection): o parametro "id" agora e passado via
+        // PreparedStatement com placeholder "?". O driver JDBC faz o escape
+        // automatico do valor, tornando impossivel a injecao de SQL arbitrario.
+        // Antes: stmt.executeQuery("SELECT * FROM contas WHERE id = '" + id + "'")
+        // Depois: query parametrizada — o valor nunca e interpretado como SQL.
+        PreparedStatement stmt = conn.prepareStatement(
+                "SELECT * FROM contas WHERE id = ?");
+        stmt.setString(1, id);
+        ResultSet rs = stmt.executeQuery();
 
         StringBuilder resultado = new StringBuilder();
         while (rs.next()) {
@@ -43,8 +45,6 @@ public class AccountController {
         }
         return resultado.toString();
     }
-
-    
 
     @GetMapping("/health")
     public String health() {
