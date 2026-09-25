@@ -37,7 +37,7 @@ jobs:
           sudo install -m 755 gitleaks /usr/local/bin/gitleaks
 
       - name: Executar Gitleaks
-        run: gitleaks detect --source . -v
+        run: gitleaks detect --source . -v --config .gitleaks.toml
         # Escaneia TODO o historico de commits do repositorio (nao apenas o
         # diff do push atual). Se algum segredo for encontrado, o gitleaks
         # retorna codigo de saida 1 e este step falha, bloqueando a pipeline.
@@ -48,6 +48,10 @@ jobs:
         # commit de um push multi-commit e a RAIZ do repositorio (sem pai),
         # esse calculo gera um "git log" invalido e a Action acaba escaneando
         # zero commits, passando silenciosamente mesmo com segredo exposto.
+        #
+        # --config .gitleaks.toml: usa o allowlist definido no repositorio
+        # para ignorar as chaves de exemplo publicas e inofensivas que
+        # existem no historico (commit df279d8 — AppConfig.java original).
 
   # -----------------------------------------------------------------------
   # JOB 2 - TESTES UNITARIOS + QUALITY GATE

@@ -1,0 +1,38 @@
+# .gitleaks.toml
+# Allowlist para chaves de EXEMPLO publicas e inofensivas presentes no
+# historico do repositorio (commit df279d8 — AppConfig.java original).
+#
+# Contexto:
+#   Essas "credenciais" sao valores de demonstracao publicos:
+#   - A chave AWS (AKIAIOSFODNN7EXAMPLE) e o proprio exemplo da documentacao
+#     oficial da AWS (https://docs.aws.amazon.com/IAM/latest/UserGuide/...),
+#     nunca foi uma credencial real.
+#   - A chave Stripe (sk_live_51H8xJ2EXAMPLE...) e um valor de exemplo que
+#     nao existe em nenhum sistema de pagamento real.
+#   - A senha do banco (SuperSecretP@ssw0rd123) e ficticia.
+#
+# Por que usar allowlist em vez de reescrever o historico:
+#   Reescrever o historico (git filter-repo / BFG) so se justifica quando o
+#   segredo e real e precisa ser revogado. Para exemplos publicos e didaticos,
+#   registrar explicitamente que os achados sao conhecidos e intencionais e
+#   a pratica correta — elimina falsos positivos sem destruir o historico.
+#
+# IMPORTANTE: este arquivo NAO deve conter os valores das chaves em comentarios
+# ou em qualquer outro campo, pois o Gitleaks tambem escaneia este arquivo.
+
+title = "banco-facil-api gitleaks config"
+
+[allowlist]
+  description = "Chaves de exemplo publicas e inofensivas do repositorio didatico"
+  regexes = [
+    # Chave de acesso AWS do exemplo oficial da documentacao AWS
+    "AKIAIOSFODNN7EXAMPLE",
+    # Chave secreta AWS do exemplo oficial da documentacao AWS
+    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    # Chave Stripe de exemplo (prefixo sk_live_ + sufixo EXAMPLE)
+    "sk_live_51H8xJ2EXAMPLEKEYDONOTUSEINPRODUCTION0001",
+  ]
+  paths = [
+    # Varrer apenas o arquivo onde essas chaves de exemplo foram plantadas
+    "src/main/java/com/unifebe/devsecops/config/AppConfig.java",
+  ]
